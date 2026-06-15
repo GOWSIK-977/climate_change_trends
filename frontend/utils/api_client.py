@@ -1,7 +1,7 @@
 import requests
 import streamlit as st
 
-API_BASE_URL = "http://localhost:8000/api"
+API_BASE_URL = "https://climate-change-trends.onrender.com/api"
 
 class APIClient:
     
