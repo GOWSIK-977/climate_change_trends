@@ -4,6 +4,7 @@ from pydantic import BaseModel
 from typing import List, Dict, Optional
 import pandas as pd
 import os
+from pathlib import Path
 
 from .analytics import ClimateAnalytics
 
@@ -19,30 +20,51 @@ app.add_middleware(
 )
 
 # Load data on startup
-DATA_FILE = "c:\\Users\\gowsik\\Documents\\PROJECT SEM 4\\climate-change-trends\\data\\TNweather_1.8M.csv"
-FALLBACK_FILE = "c:\\Users\\gowsik\\Documents\\PROJECT SEM 4\\climate-change-trends\\data\\global_temperature.csv"
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
+DATA_FILE = str(BASE_DIR / "data" / "TNweather_1.8M.csv")
+FALLBACK_FILE_1 = str(BASE_DIR / "backend" / "data" / "global_temperature.csv")
+FALLBACK_FILE_2 = str(BASE_DIR / "data" / "global_temperature.csv")
+
 DATA_SOURCE_NAME = "TNweather_1.8M.csv"
+LOADED_FILE_PATH = DATA_FILE
 df = None
 
 @app.on_event("startup")
 async def startup_event():
-    global df
+    global df, DATA_SOURCE_NAME, LOADED_FILE_PATH
     file_to_load = None
-    source_name = DATA_SOURCE_NAME
+    source_name = "None"
     
     if os.path.exists(DATA_FILE):
         file_to_load = DATA_FILE
-    elif os.path.exists(FALLBACK_FILE):
-        file_to_load = FALLBACK_FILE
+        source_name = "TNweather_1.8M.csv"
+    elif os.path.exists(FALLBACK_FILE_1):
+        file_to_load = FALLBACK_FILE_1
+        source_name = "global_temperature.csv"
+    elif os.path.exists(FALLBACK_FILE_2):
+        file_to_load = FALLBACK_FILE_2
         source_name = "global_temperature.csv"
     
     if file_to_load:
+        LOADED_FILE_PATH = file_to_load
+        DATA_SOURCE_NAME = source_name
         df = pd.read_csv(file_to_load)
+        
+        # If the dataset is global_temperature, map column names to match the expected schema
+        if 'Global_Temp' in df.columns:
+            df = df.rename(columns={
+                'Global_Temp': 'temperature_2m',
+                'CO2_Levels': 'relative_humidity_2m',
+                'Sea_Level_Rise': 'precipitation'
+            })
+            if 'wind_speed_10m' not in df.columns:
+                df['wind_speed_10m'] = 10.0  # Add mock wind speed
+                
         df = ClimateAnalytics.clean_data(df)
         print(f"Data loaded: {len(df)} records from {df['Year'].min()} to {df['Year'].max()}")
-        print(f"Data Source: {source_name}")
+        print(f"Data Source: {source_name} (loaded from {file_to_load})")
     else:
-        print(f"Warning: Data file not found. Tried {DATA_FILE} and {FALLBACK_FILE}")
+        print(f"Warning: Data file not found. Tried {DATA_FILE}, {FALLBACK_FILE_1}, and {FALLBACK_FILE_2}")
 
 # API Endpoints
 @app.get("/")
@@ -55,7 +77,7 @@ def get_data_source():
         return {"data_source": "Unknown", "status": "not loaded"}
     return {
         "data_source": DATA_SOURCE_NAME,
-        "file_path": DATA_FILE,
+        "file_path": LOADED_FILE_PATH,
         "total_records": len(df),
         "year_range": f"{int(df['Year'].min())} - {int(df['Year'].max())}"
     }
@@ -104,6 +126,26 @@ def get_correlations():
         raise HTTPException(status_code=500, detail="Data not loaded")
     
     correlations = ClimateAnalytics.correlation_analysis(df)
+    
+    # Map the correlation keys to the ones expected by the frontend app.py
+    if 'interpretations' not in correlations:
+        correlations['interpretations'] = {}
+        
+    # Alias temperature_2m_relative_humidity_2m to temp_co2
+    if 'temperature_2m_relative_humidity_2m' in correlations:
+        correlations['temp_co2'] = correlations['temperature_2m_relative_humidity_2m']
+        correlations['interpretations']['temp_co2'] = correlations['interpretations'].get('temperature_2m_relative_humidity_2m', '')
+    
+    # Alias temperature_2m_precipitation to temp_sea
+    if 'temperature_2m_precipitation' in correlations:
+        correlations['temp_sea'] = correlations['temperature_2m_precipitation']
+        correlations['interpretations']['temp_sea'] = correlations['interpretations'].get('temperature_2m_precipitation', '')
+        
+    # Alias relative_humidity_2m_precipitation to co2_sea
+    if 'relative_humidity_2m_precipitation' in correlations:
+        correlations['co2_sea'] = correlations['relative_humidity_2m_precipitation']
+        correlations['interpretations']['co2_sea'] = correlations['interpretations'].get('relative_humidity_2m_precipitation', '')
+        
     return correlations
 
 @app.get("/api/forecast")
